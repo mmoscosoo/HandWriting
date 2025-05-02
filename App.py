@@ -1,65 +1,95 @@
-import tensorflow as tf
-from PIL import Image, ImageOps
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
+import os
 import streamlit as st
-from streamlit_drawable_canvas import st_canvas
+from PyPDF2 import PdfReader
+from PIL import Image
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import FAISS
+from langchain.llms import OpenAI
+from langchain.chains.question_answering import load_qa_chain
+import platform
 
-# App
-def predictDigit(image):
-    model = tf.keras.models.load_model("model/handwritten.h5")
-    image = ImageOps.grayscale(image)
-    img = image.resize((28,28))
-    img = np.array(img, dtype='float32')
-    img = img/255
-    plt.imshow(img)
-    plt.show()
-    img = img.reshape((1,28,28,1))
-    pred= model.predict(img)
-    result = np.argmax(pred[0])
-    return result
+st.markdown("""
+    <style>
+    body {
+        background-color: #FFF8DC !important;
+        color: black !important;
+    }
 
-# Streamlit 
-st.set_page_config(page_title='Reconocimiento de Dígitos escritos a mano', layout='wide')
-st.title('Reconocimiento de Dígitos escritos a mano')
-st.subheader("Dibuja el digito en el panel  y presiona  'Predecir'")
+    h1, h2, h3, h4, h5, h6 {
+        color: black !important;
+    }
 
-# Add canvas component
-# Specify canvas parameters in application
-drawing_mode = "freedraw"
-stroke_width = st.slider('Selecciona el ancho de línea', 1, 30, 15)
-stroke_color = '#FFFFFF' # Set background color to white
-bg_color = '#000000'
+    .stTextInput, .stTextArea, .stNumberInput, .stSlider, .stFileUploader, .stMarkdown, .stButton {
+        background-color: #FFFFFF !important;
+        color: black !important;
+    }
 
-# Create a canvas component
-canvas_result = st_canvas(
-    fill_color="rgba(255, 165, 0, 0.3)",  # Fixed fill color with some opacity
-    stroke_width=stroke_width,
-    stroke_color=stroke_color,
-    background_color=bg_color,
-    height=200,
-    width=200,
-    key="canvas",
-)
+    .stTitle, .stSubheader, .stHeader, .stText, .stTextInput label, .stFileUploader label, .stTextArea label {
+        color: black !important;
+    }
 
-# Add "Predict Now" button
-if st.button('Predecir'):
-    if canvas_result.image_data is not None:
-        input_numpy_array = np.array(canvas_result.image_data)
-        input_image = Image.fromarray(input_numpy_array.astype('uint8'),'RGBA')
-        input_image.save('prediction/img.png')
-        img = Image.open("prediction/img.png")
-        res = predictDigit(img)
-        st.header('El Digito es : ' + str(res))
-    else:
-        st.header('Por favor dibuja en el canvas el digito.')
+    .stWarning, .stError, .stInfo {
+        background-color: #cce5ff !important;
+        color: black !important;
+    }
 
-# Add sidebar
-st.sidebar.title("Acerca de:")
-st.sidebar.text("En esta aplicación se evalua ")
-st.sidebar.text("la capacidad de un RNA de reconocer") 
-st.sidebar.text("digitos escritos a mano.")
-st.sidebar.text("Basado en desarrollo de Vinay Uniyal")
-#st.sidebar.text("GitHub Repository")
-#st.sidebar.write("[GitHub Repo Link](https://github.com/Vinay2022/Handwritten-Digit-Recognition)")
+    .stSidebar, .stSidebar .sidebar-content {
+        display: none !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+st.title("📄🤖 RAG - Chatea con tu PDF")
+st.write(f"🧪 Versión de Python: {platform.python_version()}")
+st.write("💬 Carga un archivo PDF y pregúntale cualquier cosa. Yo me encargo del resto 😉")
+
+ke = st.text_input("🔑 Ingresa tu Clave de OpenAI", type="password")
+if ke:
+    os.environ["OPENAI_API_KEY"] = ke
+else:
+    st.warning("⚠️ Por favor ingresa tu clave de API de OpenAI para continuar")
+
+pdf = st.file_uploader("📎 Carga el archivo PDF", type="pdf")
+
+if pdf is not None and ke:
+    try:
+        pdf_reader = PdfReader(pdf)
+        text = ""
+        for page in pdf_reader.pages:
+            text += page.extract_text()
+        
+        st.info(f"📚 Texto extraído: {len(text)} caracteres")
+
+        text_splitter = CharacterTextSplitter(
+            separator="\n",
+            chunk_size=500,
+            chunk_overlap=20,
+            length_function=len
+        )
+        chunks = text_splitter.split_text(text)
+        st.success(f"🔍 Documento dividido en {len(chunks)} fragmentos")
+
+        embeddings = OpenAIEmbeddings()
+        knowledge_base = FAISS.from_texts(chunks, embeddings)
+
+        st.subheader("❓ Escribe qué quieres saber sobre el documento")
+        user_question = st.text_area(" ", placeholder="✍️ Escribe tu pregunta aquí...")
+
+        if user_question:
+            docs = knowledge_base.similarity_search(user_question)
+            llm = OpenAI(temperature=0, model_name="gpt-4o")
+            chain = load_qa_chain(llm, chain_type="stuff")
+            response = chain.run(input_documents=docs, question=user_question)
+            st.markdown("### ✅ Respuesta:")
+            st.markdown(response)
+
+    except Exception as e:
+        st.error(f"🚫 Error al procesar el PDF: {str(e)}")
+        import traceback
+        st.error(traceback.format_exc())
+elif pdf is not None and not ke:
+    st.warning("🔐 Por favor ingresa tu clave de API de OpenAI para continuar")
+else:
+    st.info("📤 Por favor carga un archivo PDF para comenzar")
+
